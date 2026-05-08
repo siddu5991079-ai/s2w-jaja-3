@@ -1,0 +1,99 @@
+name: 24/7 Pro Stream Bot & Debugger
+
+# 👇 Yahan run-name add kar diya gaya hai
+run-name: "Stream Bot - Channel ${{ inputs.okru_stream_channel }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'Target Stream URL'
+        required: true
+        type: string
+        default: 'https://dlhd.pk/watch.php?id=598'
+      okru_stream_channel:
+        description: 'OK.ru Broadcast Channel (1 to 4)'
+        required: true
+        type: choice
+        options: [ '1', '1.1', '1.2', '2', '2.1', '2.2', '3', '3.1', '3.2', '4', '4.1', '4.2', '4.3', '4.4', '4.5' ]
+        default: '1'
+      stream_quality:
+        description: 'Internet Speed / Stream Quality'
+        required: true
+        type: choice
+        options: [ '110KBps (Balanced 480p)', '50KBps (Data Saver 360p)', '30KBps (Ultra Low 240p)' ]
+        default: '110KBps (Balanced 480p)'
+      # --- YAHAN NAYA INPUT ADD KIYA HAI ---
+      player_selection:
+        description: 'Select Player (for multiple iframes)'
+        required: true
+        type: choice
+        options: [ 'None', 'PLAYER 1', 'PLAYER 2', 'PLAYER 3', 'PLAYER 4', 'PLAYER 5', 'PLAYER 6' ]
+        default: 'None'
+      # -------------------------------------
+
+permissions:
+  contents: write
+  actions: write # <-- Allows triggering the next workflow securely
+
+jobs:
+  stream-and-record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360 # 6 Hours Limit
+
+    steps:
+    - name: Get Code
+      uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+
+    - name: Install FFmpeg, Virtual Display, & Audio Server
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg xvfb pulseaudio dbus-x11
+
+    - name: Install NPM Packages
+      run: npm install
+
+    - name: Run Script (Live Broadcast + Auto Overlap Trigger)
+      env:
+        TARGET_URL: ${{ inputs.target_url }}
+        OKRU_STREAM_ID: ${{ inputs.okru_stream_channel }}
+        STREAM_QUALITY: ${{ inputs.stream_quality }}
+        PLAYER_SELECTION: ${{ inputs.player_selection }} # <-- Script ko pass ho raha hai
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Required for gh CLI
+      run: |
+        # ⏱️ AUTO-OVERLAP BACKGROUND PROCESS
+        # Yeh command background (&) mein jayegi. 5h 50m wait karne ke baad next workflow run karegi
+        (
+          echo "[*] Native Background Timer Started! Next stream will trigger in 5h 50m."
+          sleep 21000
+          echo "[*] 5h 50m completed! Triggering overlapping stream using GitHub CLI..."
+          gh workflow run main.yml \
+            -f target_url="$TARGET_URL" \
+            -f okru_stream_channel="$OKRU_STREAM_ID" \
+            -f stream_quality="$STREAM_QUALITY" \
+            -f player_selection="$PLAYER_SELECTION" # <-- Next loop mein bhi player select hoga
+        ) &
+
+        # 🎥 MAIN STREAM PROCESS
+        pulseaudio -D --exit-idle-time=-1
+        pacmd load-module module-virtual-sink sink_name=v1
+        pacmd set-default-sink v1
+        pacmd set-default-source v1.monitor
+        xvfb-run -s "-screen 0 1280x720x24 -ac" node stream.js
+
+    # 🚀 MAGIC UPLOAD TO RELEASES
+    - name: Upload Debug Video to GitHub Releases
+      if: always() 
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: "broadcast-${{ github.run_id }}"
+        name: "Broadcast Debug Log - ${{ github.run_id }}"
+        body: "First 30 seconds of the broadcast. Shows if the auto-clicker successfully bypassed ads."
+        files: recording.mp4
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
