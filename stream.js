@@ -153,9 +153,7 @@ async function startDirectStreaming() {
             if (PLAYER_SELECTION !== 'None') {
                 console.log(`[*] Switching to selected player: ${PLAYER_SELECTION}...`);
                 try {
-                    // Button group ka wait karega
                     await page.waitForSelector('#playerBtns', { timeout: 5000 }).catch(() => {});
-                    // Exact Title walay button pe click karega (e.g. PLAYER 1)
                     const playerBtn = await page.$(`button[title="${PLAYER_SELECTION}"]`);
                     if (playerBtn) {
                         await playerBtn.click();
@@ -218,48 +216,75 @@ async function startDirectStreaming() {
                 unmuteAttempts++; await new Promise(r => setTimeout(r, 1000));
             }
 
-            // 🧠 STEP C: Locate Video and Force Fullscreen (Still in background)
+            // 🧠 STEP C: SMARTER Locate Video (Anti-Ad Video System)
             let targetFrame = null;
             let frameAttempts = 0;
             
-            console.log("[*] Searching for live video frame...");
+            console.log("[*] Searching for the REAL live video frame (ignoring ads)...");
             
-            // Fix: 20 seconds tak wait karega taaki reload ke baad video tag miss na ho
             while (!targetFrame && frameAttempts < 20) {
                 for (const frame of page.frames()) {
                     try {
-                        const hasVideo = await frame.evaluate(() => {
+                        const isRealStream = await frame.evaluate(() => {
                             const vid = document.querySelector('video');
-                            return vid !== null; 
+                            if (!vid) return false; // Video tag hi nahi hai toh reject
+
+                            // 🎯 NISHANI 1: Kya video link 'blob:' se shuru ho raha hai? (Live Streams ki pehchan)
+                            const isBlob = vid.src.includes('blob:') || (vid.currentSrc && vid.currentSrc.includes('blob:'));
+                            
+                            // 🎯 NISHANI 2: Kya iframe ke andar Asli Player mojood hai?
+                            const hasPlayerUI = document.querySelector('.jw-controls, .jw-icon, .plyr__controls, .vjs-control-bar, [data-player], #UnMutePlayer') !== null;
+                            
+                            // 🎯 NISHANI 3: Agar size bara hai tab bhi confirm kar lo
+                            const isLarge = vid.clientWidth > 150 && vid.clientHeight > 100;
+
+                            // Agar player UI hai, YA blob stream hai, YA size bara hai -> Yeh asli stream hai!
+                            return isBlob || hasPlayerUI || isLarge; 
                         });
-                        if (hasVideo) { targetFrame = frame; break; }
+
+                        if (isRealStream) { targetFrame = frame; break; }
                     } catch (e) { }
                 }
                 
                 if (!targetFrame) {
                     frameAttempts++;
-                    await new Promise(r => setTimeout(r, 1000)); // 1 second wait karega aur phir dhundega
+                    await new Promise(r => setTimeout(r, 1000));
                 }
             }
 
             if (!targetFrame) {
-                console.log("[-] Warning: Could not find iframe with video tag. Defaulting to main frame.");
+                console.log("[-] Warning: Could not find real stream. Defaulting to main frame.");
                 targetFrame = page.mainFrame();
             }
 
-            // --- YAHAN IFRAME URL PRINT KARNE KA LOGIC ADD KIYA HAI ---
-            console.log(`[+] Live Stream detected in Iframe Source URL: ${targetFrame.url()}`);
-            // ----------------------------------------------------------
+            console.log(`[+] Real Live Stream securely locked in Iframe URL: ${targetFrame.url()}`);
 
-            await page.evaluate(() => {
-                document.body.style.backgroundColor = 'black'; document.body.style.overflow = 'hidden';
-                document.querySelectorAll('iframe').forEach(iframe => {
-                    iframe.style.position = 'fixed'; iframe.style.top = '0'; iframe.style.left = '0';
-                    iframe.style.width = '100vw'; iframe.style.height = '100vh';
-                    iframe.style.zIndex = '999999'; iframe.style.backgroundColor = 'black'; iframe.style.border = 'none';
-                });
-            }).catch(() => {});
+            // Baqi sab (ads iframes) ko hide kar do aur targetFrame ko full screen!
+            try {
+                if (targetFrame !== page.mainFrame()) {
+                    const iframeHandle = await targetFrame.frameElement();
+                    if (iframeHandle) {
+                        await page.evaluate((targetIframe) => {
+                            document.body.style.backgroundColor = 'black'; 
+                            document.body.style.overflow = 'hidden';
+                            
+                            document.querySelectorAll('iframe').forEach(iframe => {
+                                if (iframe === targetIframe) {
+                                    iframe.style.display = 'block';
+                                    iframe.style.position = 'fixed'; 
+                                    iframe.style.top = '0'; iframe.style.left = '0';
+                                    iframe.style.width = '100vw'; iframe.style.height = '100vh';
+                                    iframe.style.zIndex = '999999'; iframe.style.backgroundColor = 'black'; iframe.style.border = 'none';
+                                } else {
+                                    iframe.style.display = 'none'; // Ads Gayab!
+                                }
+                            });
+                        }, iframeHandle);
+                    }
+                }
+            } catch (err) {}
 
+            // Target frame mein video player ki apni controls hide karna aur video ko display karna
             await targetFrame.evaluate(async () => {
                 const style = document.createElement('style');
                 style.innerHTML = `.jw-controls, .jw-ui, .plyr__controls, .vjs-control-bar, [data-player] .controls, #UnMutePlayer { display: none !important; }`;
@@ -268,7 +293,6 @@ async function startDirectStreaming() {
                 const video = document.querySelector('video');
                 if (video) { 
                     video.muted = false; video.volume = 1.0; 
-                    // Fix: Ensure video display is forced block and opacity is 1
                     video.style.display = 'block'; video.style.opacity = '1';
                     video.style.position = 'fixed'; video.style.top = '0'; video.style.left = '0';
                     video.style.width = '100vw'; video.style.height = '100vh';
